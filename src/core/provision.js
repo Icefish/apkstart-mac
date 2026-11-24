@@ -751,7 +751,7 @@ class Provisioner {
           fs.writeFileSync(target, zip.read(name));
         }
         if (process.platform !== 'win32') {
-          if (!path.extname(target) || /\.(sh|bin)$/i.test(target) || /emulator|adb|qemu|crashreport/i.test(path.basename(target))) {
+          if (!path.extname(target) || /\.(sh|bin|ext4)$/i.test(target) || /emulator|adb|qemu|crashreport|e2fsck|resize2fs|tune2fs|mkfs|fsck/i.test(path.basename(target))) {
             try { fs.chmodSync(target, 0o755); } catch (_) { /* ignore */ }
           }
         }

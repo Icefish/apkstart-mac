@@ -254,10 +254,18 @@ class EmulatorEngine {
     const pids = new Set();
     // 1) 锁文件里 emulator 自己写的 pid（最可靠）
     try {
-      const f = path.join(avdDir, 'hardware-qemu.ini.lock', 'pid');
-      if (fs.existsSync(f) && fs.statSync(f).isFile()) {
-        const pid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
-        if (pid) pids.add(pid);
+      const lockFile = path.join(avdDir, 'hardware-qemu.ini.lock');
+      if (fs.existsSync(lockFile)) {
+        if (fs.statSync(lockFile).isFile()) {
+          const pid = parseInt(fs.readFileSync(lockFile, 'utf8').trim().replace(/\0/g, ''), 10);
+          if (pid) pids.add(pid);
+        } else {
+          const f = path.join(lockFile, 'pid');
+          if (fs.existsSync(f) && fs.statSync(f).isFile()) {
+            const pid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+            if (pid) pids.add(pid);
+          }
+        }
       }
     } catch (_) { /* ignore */ }
     // 2) 兜底：按进程名 + 端口找活着的 qemu（tasklist/netstat 比 wmic 快一个量级）
@@ -587,6 +595,25 @@ class EmulatorEngine {
     try {
       fs.rmSync(img, { force: true });
       fs.rmSync(`${img}.qcow2`, { force: true });
+
+      const mkfsBin = process.platform === 'win32' ? 'mkfs.ext4.exe' : 'mkfs.ext4';
+      const bin64Dir = path.join(path.dirname(this.locate().emulatorExe), 'bin64');
+      const mkfsPath = path.join(bin64Dir, mkfsBin);
+      if (fs.existsSync(mkfsPath)) {
+        try { fs.chmodSync(mkfsPath, 0o755); } catch (_) { /* ignore */ }
+        const fd = fs.openSync(img, 'w');
+        fs.ftruncateSync(fd, wantBytes);
+        fs.closeSync(fd);
+        const r = spawnSync(mkfsPath, ['-F', '-b', '4096', '-I', '512', '-O', 'has_journal,extent', img], {
+          cwd: bin64Dir, windowsHide: process.platform === 'win32', encoding: 'utf8', timeout: 30000,
+        });
+        if (r.status === 0) {
+          userdata.setEncryptFlag(img);
+          this.log(`已通过 mkfs.ext4 重建 userdata：${(wantBytes / 1024 / 1024 / 1024).toFixed(1)}GB ext4（512B inode，支持 FBE）`);
+          return { ok: true, created: true, size: wantBytes };
+        }
+      }
+
       // 先不带 encrypt 位（老 e2fsck/resize2fs 才肯干活）
       fs.writeFileSync(img, userdata.buildEmptyExt4({ sizeMB: 64, encrypt: false }));
       this._qemuImg('resize', img, wantBytes);
@@ -818,12 +845,16 @@ class EmulatorEngine {
       this.log(`emulator exit ${code}${meaning ? `（${meaning}）` : ''}`);
       this._logWrite(logFile, `emulator exit ${code}${meaning ? `（${meaning}）` : ''}\n`);
       this.proc = null;
-      onLog(`运行时已退出（code=${code}${meaning ? `，${meaning}` : ''}）`);
+      if (code !== 0) {
+        this._isAlive = false;
+        onLog(`运行时已退出（code=${code}${meaning ? `，${meaning}` : ''}）`);
+      }
     });
     proc.on('error', (e) => {
       this.log(`spawn error: ${e.message}`);
       this._logWrite(logFile, `spawn error: ${e.message}\n`);
       this.proc = null;
+      this._isAlive = false;
     });
 
     // qemu 是 detached 的独立进程，等它真正起来再把优先级降下来。
@@ -933,6 +964,7 @@ class EmulatorEngine {
 
   /** 强杀当前尝试（含 qemu 子进程树） */
   async killAttempt() {
+    this._isAlive = false;
     const proc = this.proc;
     this.proc = null;
     if (proc) {
@@ -1387,13 +1419,15 @@ class EmulatorEngine {
       const forceWipe = !!this._forceWipe;
       this._forceWipe = false;
       // _coldBoot 只对这次 spawn 生效，避免之后每次开机都退化成长时间冷启动
+      this._isAlive = true;
       this.spawnOnce({ ...plan, wipe: plan.wipe || avd.wipePending || forceWipe }, { headless, onLog, logFile });
       this._coldBoot = false;
 
       // 参数错误 / DLL 缺失会立刻退出
       // eslint-disable-next-line no-await-in-loop
       const dead = await this._waitSpawnSettled(2200);
-      if (dead || !this.proc) {
+      const isDead = dead && (this.lastExitCode !== 0 || !(await this._consoleAlive()));
+      if (isDead || !this.running()) {
         const d = doctor.diagnose(this._attemptLines(logStart, 60));
         this.attempts.push({ plan: plan.label, diagnosis: d.code, exitCode: this.lastExitCode });
         this.lastDiagnosis = d;
@@ -1430,7 +1464,15 @@ class EmulatorEngine {
       let lastNotice = 0;
       // eslint-disable-next-line no-await-in-loop
       while (Date.now() - started < timeout) {
-        if (!this.proc) { fatal = true; break; }
+        if (!this.running()) { fatal = true; break; }
+        if (!this.proc && Date.now() - started > 8000) {
+          const alive = await this._consoleAlive();
+          if (!alive) {
+            this._isAlive = false;
+            fatal = true;
+            break;
+          }
+        }
         let state = 'pending';
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -1528,7 +1570,7 @@ class EmulatorEngine {
     throw err;
   }
 
-  running() { return !!(this.proc && !this.proc.killed); }
+  running() { return !!(this.proc && !this.proc.killed) || !!this._isAlive; }
 
   /**
    * 保存 quickboot 快照（下次开机直接恢复内存状态，像 WSA/应用宝的快速启动）。
@@ -1581,6 +1623,7 @@ class EmulatorEngine {
 
   /** 优雅停止：慢机器先保存 quickboot 快照，再走控制台关机，最后强杀进程树 */
   async stop({ adbPath } = {}) {
+    this._isAlive = false;
     if (!this.proc) {
       // 接管来的实例没有 proc 句柄，但端口上确实有机器在跑，不能直接返回 true 走人
       if (!(await this._anyEmulatorPortAlive())) return true;

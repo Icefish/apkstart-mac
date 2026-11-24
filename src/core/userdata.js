@@ -26,7 +26,7 @@
  */
 
 const BLOCK = 4096;
-const INODE_SIZE = 128;
+const INODE_SIZE = 512;
 const FIRST_INO = 11;
 
 // ext4 feature 位
@@ -110,6 +110,8 @@ function buildEmptyExt4(opts = {}) {
   buf.writeUInt32LE(2, sb + 0x278);
   buf.writeUInt8(2, sb + 0xFC);                                // s_def_hash_version = half_md4
   buf.writeUInt16LE(0, sb + 0xFE);                             // s_desc_size（非 64bit 用 0）
+  buf.writeUInt16LE(32, sb + 0x15C);                            // s_want_extra_isize（Android 14 project quota 需要 >= 32）
+  buf.writeUInt16LE(32, sb + 0x15E);                            // s_min_extra_isize
 
   // ---------- group descriptor（block 1）----------
   const gd = GD_BLOCK * BLOCK;
@@ -151,6 +153,7 @@ function buildEmptyExt4(opts = {}) {
   buf.writeUInt32LE(BLOCK / 512, rootOff + 0x1C);   // i_blocks（512B 单位）
   buf.writeUInt32LE(0, rootOff + 0x20);             // i_flags
   buf.writeUInt32LE(DIR_BLOCK, rootOff + 0x28);     // i_block[0]（无 extents，走直接块）
+  buf.writeUInt16LE(32, rootOff + 0x80);            // i_extra_isize = 32
 
   // ---------- root 目录数据块 ----------
   const dir = DIR_BLOCK * BLOCK;
