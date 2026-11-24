@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS = {
     // 上次「拉起就崩」的渲染后端（格式 `<emulator版本>|<gpu>`）；auto 模式下下次把它排到最后，
     // 免得每次开机都先白等 20 多秒再退到软件渲染。升级运行时会自动失效。
     badGpu: '',
+    accelMode: 'auto',       // auto = 自动（按系统支持） | on = 强制硬件加速 (HVF/WHPX) | off = 纯软件模拟 (TCG)
     forceTcg: false,         // 保留给高级排障；正常路径已由 doctor 自动回退
     audio: true,             // 安卓应用的声音（提示音/视频）。关闭可省一点 CPU
     // 麦克风输入：默认开启，让应用能用 PC 麦克风（语音/通话/录音）。

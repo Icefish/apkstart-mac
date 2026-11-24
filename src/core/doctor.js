@@ -265,6 +265,12 @@ function chooseProfile({
     })()
     : lcdFor({ accelOk, landscape: wantLandscape });
 
+  const userAccelMode = overrides.accelMode || (settings && settings.engine && settings.engine.accelMode) || 'auto';
+  let profileAccel = accelOk ? 'auto' : 'off';
+  if (userAccelMode === 'on') profileAccel = 'on';
+  else if (userAccelMode === 'off') profileAccel = 'off';
+  const effAccelOk = profileAccel !== 'off';
+
   return {
     memoryMB,
     cores,
@@ -273,14 +279,14 @@ function chooseProfile({
     lcd,
     gpu,
     gpuCandidates: gpus,
-    accel: accelOk ? 'auto' : 'off',
-    accelOk,
+    accel: profileAccel,
+    accelOk: effAccelOk,
     port,
     adbPort,
     snapshot: true,
     lite: !!lite,
-    // 无加速的纯软件模拟在 Windows 上确实能起来，但 Android 14 冷启动可能 5-10 分钟
-    bootTimeoutMs: accelOk ? 240000 : 600000,
+    // 首次冷开机需格式化分区与初始化，给足 10 分钟；无加速纯软件模拟给 15 分钟
+    bootTimeoutMs: effAccelOk ? 600000 : 900000,
     emulatorVersion,
     host,
   };
@@ -298,6 +304,7 @@ function overridesFromSettings(engine = {}) {
     memoryMB: manual ? Number(e.memoryMB) || 0 : 0,
     cores: manual ? Number(e.cores) || 0 : 0,
     gpuMode: e.gpuMode && e.gpuMode !== 'auto' ? e.gpuMode : '',
+    accelMode: e.accelMode && ['auto', 'on', 'off'].includes(e.accelMode) ? e.accelMode : 'auto',
   };
 }
 
@@ -326,25 +333,29 @@ function planVariants(profile) {
   const firstGpu = profile.gpu || gpus[0] || 'software';
   const safeGpu = gpus.find((g) => /software|swiftshader/.test(g)) || firstGpu;
   const ordered = [firstGpu, ...gpus.filter((g) => g !== firstGpu && /swiftshader|swangle/.test(g))].slice(0, 2);
+  const accelDesc = profile.accel === 'off' ? '软件模拟' : (profile.accel === 'on' ? '强制硬件加速' : '硬件加速');
   for (const gpu of ordered) {
-    out.push({ ...profile, gpu, label: `${gpu} / ${profile.accel === 'auto' ? '硬件加速' : '软件模拟'}`, wipe: false, snapshot: true });
+    out.push({ ...profile, gpu, label: `${gpu} / ${accelDesc}`, wipe: false, snapshot: true });
+  }
+  // 用户显式要求「强制硬件加速」时，不退回龟速的纯软件模拟（那在无快照下几乎开不完）
+  if (profile.accel !== 'on') {
+    out.push({
+      ...profile,
+      gpu: safeGpu,
+      accel: 'off',
+      label: '关闭加速的软件模拟（慢，但兼容性最好）',
+      wipe: false,
+      snapshot: true,
+    });
   }
   out.push({
     ...profile,
     gpu: safeGpu,
-    accel: 'off',
-    label: '关闭加速的软件模拟（慢，但兼容性最好）',
-    wipe: false,
-    snapshot: true,
-  });
-  out.push({
-    ...profile,
-    gpu: safeGpu,
-    accel: 'off',
+    accel: profile.accel === 'on' ? 'on' : 'off',
     memoryMB: 2048,
     cores: 2,
     dataMB: Math.min(profile.dataMB, 2048),
-    label: '保守冷启动（最小内存 + 清快照）',
+    label: `保守冷启动（最小内存 + 清快照 · ${profile.accel === 'on' ? '强制加速' : '软件模拟'}）`,
     // 这里**绝对不能** wipe：以前写的是 wipe:true，而磁盘写满时每次尝试都会失败，
     // 于是连续重试把用户已装的应用和存档一起「清快照 + 清数据」了 ——
     // 「磁盘满了，结果打开 ApkStart 应用全没了」就是这么发生的。

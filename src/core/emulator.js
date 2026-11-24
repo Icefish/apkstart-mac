@@ -787,6 +787,7 @@ class EmulatorEngine {
     }
     if (wipe) args.push('-wipe-data');
     if (accel === 'off') args.push('-accel', 'off');
+    else if (accel === 'on') args.push('-accel', 'on');
     else if (process.platform === 'darwin') args.push('-accel', 'auto');
     // 驱动声明的其它参数：-gpu / -accel 已经由上面的 gpu/accel 统一处理，这里跳过，
     // 避免同一个参数出现两次（emulator 对重复参数的行为在不同版本上不一致）。
@@ -1452,8 +1453,9 @@ class EmulatorEngine {
         return { ok: true, serial: this.serial, port, accel: accelInfo, logFile, profile, attempts: this.attempts };
       }
 
+      const isColdBoot = !plan.snapshot || !this.hasSnapshot() || !!this._coldBoot || !!plan.wipe;
       const started = Date.now();
-      const timeout = plan.bootTimeoutMs || 240000;
+      const timeout = isColdBoot ? Math.max(plan.bootTimeoutMs || 0, 600000) : (plan.bootTimeoutMs || 300000);
       let ok = false;
       let fatal = false;
       let sawBooting = false;
@@ -1462,15 +1464,21 @@ class EmulatorEngine {
       // 长引导过程也不会把 CPU 花在轮询上。
       let interval = 200;
       let lastNotice = 0;
+      let deadStreak = 0;
       // eslint-disable-next-line no-await-in-loop
       while (Date.now() - started < timeout) {
         if (!this.running()) { fatal = true; break; }
         if (!this.proc && Date.now() - started > 8000) {
           const alive = await this._consoleAlive();
           if (!alive) {
-            this._isAlive = false;
-            fatal = true;
-            break;
+            deadStreak += 1;
+            if (deadStreak >= 3) {
+              this._isAlive = false;
+              fatal = true;
+              break;
+            }
+          } else {
+            deadStreak = 0;
           }
         }
         let state = 'pending';
@@ -1686,14 +1694,13 @@ class EmulatorEngine {
   }
 
   /** 本实例的控制台端口（5554）上是否还有机器在跑 —— 判断「到底关干净了没有」 */
-  _consoleAlive() {
+  _consoleAlive(port = this.port || 5554, timeoutMs = 800) {
     const net = require('net');
-    const port = this.port || 5554;
     return new Promise((resolve) => {
       const sock = net.connect({ host: '127.0.0.1', port });
       let done = false;
       const fin = (v) => { if (done) return; done = true; try { sock.destroy(); } catch (_) { /* ignore */ } resolve(v); };
-      sock.setTimeout(200, () => fin(false));
+      sock.setTimeout(timeoutMs, () => fin(false));
       sock.once('connect', () => fin(true));
       sock.once('error', () => fin(false));
     });

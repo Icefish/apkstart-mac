@@ -156,6 +156,18 @@ test('实验室分组有多开开关，且接到 engine.multiWindow', () => {
   assert(/multiWindow:\s*false/.test(storeJs), 'store 要有 multiWindow 默认值且默认关闭');
 });
 
+test('性能与资源分组有 CPU 硬件加速下拉，且接到 engine.accelMode 与底层', () => {
+  assert(html.includes('id="setAccelMode"'), '应有 CPU 硬件加速选择框');
+  assert(/setAccelMode'\)\.value = eng\.accelMode \|\| 'auto'/.test(appJs), '要回填 accelMode 状态');
+  assert(/engine:\s*\{\s*accelMode:\s*e\.target\.value/.test(appJs), '要把选择存到 engine.accelMode');
+  const storeJs = fs.readFileSync(path.join(ROOT, 'src/core/store.js'), 'utf8');
+  assert(/accelMode:\s*'auto'/.test(storeJs), 'store 要有 accelMode 默认值');
+  const doctorJs = fs.readFileSync(path.join(ROOT, 'src/core/doctor.js'), 'utf8');
+  assert(/accelMode/.test(doctorJs), 'doctor 需消费 accelMode');
+  const emulatorJs = fs.readFileSync(path.join(ROOT, 'src/core/emulator.js'), 'utf8');
+  assert(/args\.push\('-accel', 'on'\)/.test(emulatorJs), 'emulator 需支持 -accel on 命令行参数');
+});
+
 console.log('\n[设置分类 · 样式]');
 test('有导航、搜索与检测面板的样式', () => {
   for (const sel of ['.set-nav', '.set-nav-item', '.set-search', '.dbg-list', '.dbg-item', '.modal-main']) {

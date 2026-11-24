@@ -1088,6 +1088,7 @@ function fillSettings(s) {
   const eng = s.engine || {};
   if ($('setResourceMode')) $('setResourceMode').value = eng.resourceMode || 'balanced';
   if ($('setGpuPreference')) $('setGpuPreference').value = eng.gpuPreference || 'auto';
+  if ($('setAccelMode')) $('setAccelMode').value = eng.accelMode || 'auto';
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
@@ -1694,6 +1695,12 @@ function bindSettings() {
     $('setGpuPreference').addEventListener('change', (e) => {
       save({ engine: { gpuPreference: e.target.value } });
       toast({ title: '显卡偏好已保存', body: '下一次启动安卓时生效', type: 'ok' });
+    });
+  }
+  if ($('setAccelMode')) {
+    $('setAccelMode').addEventListener('change', (e) => {
+      save({ engine: { accelMode: e.target.value } });
+      toast({ title: '硬件加速设置已保存', body: '下一次启动安卓时生效', type: 'ok' });
     });
   }
   if ($('setRenderSize')) {

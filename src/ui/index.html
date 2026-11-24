@@ -428,6 +428,15 @@
           </select>
           <span class="sub">电脑同时有独显和核显时，Windows 有时会把模拟器分到核显，导致画面卡。这里可以明确指定用哪块显卡渲染；仅 Windows 10 1803+ 生效，改动在下次启动安卓时应用。<span id="gpuPrefNote" class="inline-note"></span></span>
         </div>
+        <div class="field">
+          <label>CPU 硬件加速（虚拟化）</label>
+          <select id="setAccelMode">
+            <option value="auto">自动（推荐 · 检测并优先使用硬件加速）</option>
+            <option value="on">强制开启（macOS HVF / Windows WHPX）</option>
+            <option value="off">关闭加速（纯软件模拟 TCG · 最慢但兼容性最好）</option>
+          </select>
+          <span class="sub">决定安卓虚拟机如何使用 CPU 虚拟化加速。macOS 默认使用 Hypervisor (HVF)。若遇开机慢或卡住，可切为「强制开启」；改动在下一次启动安卓时生效。</span>
+        </div>
         <div class="field two">
           <div>
             <label>画质（安卓内部渲染分辨率）</label>
