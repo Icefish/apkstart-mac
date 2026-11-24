@@ -2075,31 +2075,44 @@ function registerIpc() {
       }
       accel = await runtime.provisioner.emulatorAccel().catch(() => ({ ok: false }));
       if (!accel.ok) {
-        // 商店版和安装版的补救路径完全不同，提示必须分开写：
-        //   - 商店（MSIX）版不能装内核驱动、也通常拿不到管理员授权 → 只能引导用户
-        //     自己去「启用或关闭 Windows 功能」里勾「Windows 虚拟机监控程序平台」；
-        //   - 安装版/便携版可以一键提权开启（失败还能退 AEHD 驱动）。
-        // 以前两种版本共用一句话，商店用户看到的是「建议安装 AEHD 驱动」——
-        // 而商店版根本装不了驱动，等于指了一条死路。
-        issues.push(store.STORE_BUILD
-          ? {
-            code: 'accel',
-            severity: 'error',
-            title: '需要开启「Windows 虚拟机监控程序平台」',
-            hint: '没有它只能跑纯软件模拟，开机会慢到几分钟。'
-              + MSIX_ACCEL_HINT
-              + '（商店版无法代你提权，需要你手动操作一次，之后重启。）',
-            fix: 'virtualization',
-          }
-          : {
+        if (process.platform === 'darwin') {
+          const emuInstalled = fs.existsSync(runtime.provisioner.paths().emulatorExe);
+          issues.push({
             code: 'accel',
             severity: 'warn',
             title: '未启用硬件加速',
-            hint: `${accel.note || '将回退软件模拟（能跑但很慢）。'}`
-              + '点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；'
-              + '失败时会自动改装 AEHD 驱动。',
-            fix: 'virtualization',
+            hint: emuInstalled
+              ? 'macOS 系统内建 Hypervisor (HVF) 支持，但模拟器加速检测未通过。将回退软件模拟。'
+              : '尚未安装 Android 模拟器核心。macOS 系统内置 Hypervisor (HVF) 硬件加速，点右侧「修复」即可跳转至运行时页面一键补齐。',
+            fix: emuInstalled ? 'virtualization' : 'deploy',
           });
+        } else {
+          // 商店版和安装版的补救路径完全不同，提示必须分开写：
+          //   - 商店（MSIX）版不能装内核驱动、也通常拿不到管理员授权 → 只能引导用户
+          //     自己去「启用或关闭 Windows 功能」里勾「Windows 虚拟机监控程序平台」；
+          //   - 安装版/便携版可以一键提权开启（失败还能退 AEHD 驱动）。
+          // 以前两种版本共用一句话，商店用户看到的是「建议安装 AEHD 驱动」——
+          // 而商店版根本装不了驱动，等于指了一条死路。
+          issues.push(store.STORE_BUILD
+            ? {
+              code: 'accel',
+              severity: 'error',
+              title: '需要开启「Windows 虚拟机监控程序平台」',
+              hint: '没有它只能跑纯软件模拟，开机会慢到几分钟。'
+                + MSIX_ACCEL_HINT
+                + '（商店版无法代你提权，需要你手动操作一次，之后重启。）',
+              fix: 'virtualization',
+            }
+            : {
+              code: 'accel',
+              severity: 'warn',
+              title: '未启用硬件加速',
+              hint: `${accel.note ? `${accel.note}。` : '将回退软件模拟（能跑但很慢）。'}`
+                + '点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；'
+                + '失败时会自动改装 AEHD 驱动。',
+              fix: 'virtualization',
+            });
+        }
       }
       free = doctor.freeDiskMB(runtime.provisioner.paths().root);
       if (free && free < 8192) {
@@ -2478,6 +2491,22 @@ function registerIpc() {
     try {
       const accel = await runtime.provisioner.emulatorAccel();
       if (accel.ok) return { ok: true, already: true, accel, note: '硬件加速已可用，无需额外操作' };
+
+      if (process.platform === 'darwin') {
+        const p = runtime.provisioner.paths();
+        if (!fs.existsSync(p.emulatorExe)) {
+          return {
+            ok: false,
+            note: 'macOS 系统内置 Hypervisor (HVF) 硬件加速。请先在「运行时」页面完成模拟器引擎部署。',
+          };
+        }
+        return {
+          ok: true,
+          already: true,
+          accel: { ok: true, kind: 'hvf' },
+          note: 'macOS Hypervisor (HVF) 硬件加速已支持并启用。',
+        };
+      }
 
       // ---------------- 商店（MSIX）版：只能走系统自带的 WHPX ----------------
       // MSIX 包由 AppX 部署模型拉起，固定 mediumIL，既不能装内核驱动（AEHD），

@@ -180,7 +180,9 @@ ApkStart.exe --launch &lt;包名&gt;
 <p><strong>症状</strong>：设置/诊断里提示"当前没有硬件加速""硬件加速不可用"；开机慢到几分钟，画面掉帧。</p>
 <p><strong>先明确</strong>：这通常是"慢"，不是"打不开"。ApkStart 已自动回退软件模拟。想要流畅才需要开加速。</p>
 <p><strong>按版本处理：</strong></p>
-<ul><li><strong>安装版 / 便携版</strong>：设置 → 诊断与修复 → 本机体检 → 找到「未启用硬件加速」→ 点<strong>修复</strong>。会弹一次 UAC，自动开启 WHPX；若开不起来（系统不支持或你点了否），会自动改装 AEHD 驱动。</li><li><strong>微软商店（MSIX）版</strong>：商店应用<strong>不能自行提权</strong>，点「修复」会打开「启用或关闭 Windows 功能」对话框：</li></ul>
+<ul><li><strong>安装版 / 便携版</strong>：设置 → 诊断与修复 → 本机体检 → 找到「未启用硬件加速」→ 点<strong>修复</strong>。会弹一次 UAC，自动开启 WHPX；若开不起来（系统不支持或你点了否），会自动改装 AEHD 驱动。</li><li><strong>macOS 版（Intel Mac / Apple Silicon M 系列）</strong>：</li></ul>
+<p>macOS 系统内置 <strong>Hypervisor.framework (HVF)</strong> 原生虚拟化支持，<strong>无需安装 Windows 的 WHPX 或 AEHD 驱动</strong>。 若提示「未安装 emulator」，代表尚未部署模拟器核心。只需前往「常用与安装 → 运行时」，点击「一键下载／部署」，安装完成后重启软件即可自动享有原生硬件加速。</p>
+<ul><li><strong>微软商店（MSIX）版</strong>：商店应用<strong>不能自行提权</strong>，点「修复」会打开「启用或关闭 Windows 功能」对话框：</li></ul>
 <p>1. 勾选 <strong>「Windows 虚拟机监控程序平台」（HypervisorPlatform）</strong>； 2. 确定后<strong>重启电脑</strong>一次。</p>
 <p>也可以用<strong>管理员 PowerShell</strong> 执行：</p>
 <p>``<code>powershell dism /online /enable-feature /featurename:HypervisorPlatform /all /norestart dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart </code>``</p>
