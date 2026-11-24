@@ -30,7 +30,8 @@
   },
   "os": [
     "win32",
-    "linux"
+    "linux",
+    "darwin"
   ],
   "scripts": {
     "start": "electron .",
@@ -48,6 +49,8 @@
     "assoc:off": "node scripts/assoc.js off",
     "test:boot": "node test/boot-test.js",
     "pack:linux": "electron-builder --linux AppImage --config electron-builder.yml",
+    "pack:mac": "electron-builder --mac dmg --config electron-builder.yml",
+    "pack:mac:all": "electron-builder --mac dmg --x64 --arm64 --config electron-builder.yml",
     "icons": "electron build/build-icons.js",
     "shots": "electron build/store-shots.js",
     "pack:full": "node build/pack.js --full",

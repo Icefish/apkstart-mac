@@ -66,6 +66,24 @@ function versionNumbers(v) {
  */
 let _gpuVendorCache = { vendor: 'unknown', at: 0 };
 function detectGpuVendor() {
+  if (process.platform === 'darwin') {
+    if (Date.now() - _gpuVendorCache.at < 600000) return _gpuVendorCache.vendor;
+    try {
+      const { execFileSync } = require('child_process');
+      const out = execFileSync('system_profiler', ['SPDisplaysDataType'], { encoding: 'utf8', timeout: 5000 });
+      const lower = String(out).toLowerCase();
+      let vendor = 'unknown';
+      if (/nvidia|geforce/.test(lower)) vendor = 'nvidia';
+      else if (/amd|radeon/.test(lower)) vendor = 'amd';
+      else if (/intel|uhd|iris/.test(lower)) vendor = 'intel';
+      else if (/apple/.test(lower)) vendor = 'apple';
+      _gpuVendorCache = { vendor, at: Date.now() };
+      return vendor;
+    } catch (_) {
+      _gpuVendorCache = { vendor: 'unknown', at: Date.now() };
+      return 'unknown';
+    }
+  }
   if (process.platform !== 'win32') return 'unknown';
   if (Date.now() - _gpuVendorCache.at < 600000) return _gpuVendorCache.vendor;
   try {
@@ -317,7 +335,7 @@ function planVariants(profile) {
     accel: 'off',
     label: '关闭加速的软件模拟（慢，但兼容性最好）',
     wipe: false,
-    snapshot: false,
+    snapshot: true,
   });
   out.push({
     ...profile,

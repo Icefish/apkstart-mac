@@ -1101,8 +1101,9 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   await test('Linux 快捷方式：.desktop 要可执行、Exec 要转义、图标必须 PNG', () => {
     const os = require('os');
     const shortcut = require('../src/core/shortcut');
-    // Windows 上生成的是 .lnk，Linux 上必须是 .desktop（freedesktop 规范）
-    assert(shortcut.shortcutExt() === (process.platform === 'win32' ? '.lnk' : '.desktop'),
+    // Windows 上生成的是 .lnk，macOS 是 .app，Linux 上必须是 .desktop（freedesktop 规范）
+    const expectedExt = process.platform === 'win32' ? '.lnk' : (process.platform === 'darwin' ? '.app' : '.desktop');
+    assert(shortcut.shortcutExt() === expectedExt,
       '快捷方式扩展名要跟平台走');
 
     // 直接调 .desktop 写入器验证内容（不依赖当前平台）
@@ -2110,8 +2111,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       assert(paths.tmp.toLowerCase().startsWith(store.DATA_DIR.toLowerCase()), '_tmp 也要改道');
       assert(paths.avdHome.toLowerCase().startsWith(store.DATA_DIR.toLowerCase()), 'AVD 也必须在可写目录');
       // 可执行文件仍然指向包内（这样才有包身份，%APPDATA% 虚拟化视图才和父进程一致）
-      assert(paths.emulatorExe === path.join(roRoot, 'emulator', 'emulator.exe'), 'emulator 仍从包内运行');
-      assert(paths.adbExe === path.join(roRoot, 'platform-tools', 'adb.exe'), 'adb 仍从包内运行');
+      const emuName = process.platform === 'win32' ? 'emulator.exe' : 'emulator';
+      const adbName = process.platform === 'win32' ? 'adb.exe' : 'adb';
+      assert(paths.emulatorExe === path.join(roRoot, 'emulator', emuName), 'emulator 仍从包内运行');
+      assert(paths.adbExe === path.join(roRoot, 'platform-tools', adbName), 'adb 仍从包内运行');
       // ensureDirs 不能因为 root 只读就抛错
       p.ensureDirs();
     } finally {

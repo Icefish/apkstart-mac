@@ -28,7 +28,11 @@ const STORE_BUILD = (() => {
 
 const DATA_DIR = STORE_BUILD
   ? path.join(os.homedir(), 'ApkStart', 'data')
-  : path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'apkstart');
+  : process.env.APPDATA
+    ? path.join(process.env.APPDATA, 'apkstart')
+    : process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support', 'apkstart')
+      : path.join(os.homedir(), 'AppData', 'Roaming', 'apkstart');
 const ICON_DIR = path.join(DATA_DIR, 'icons');
 const APK_DIR = path.join(DATA_DIR, 'apks');
 const APPS_FILE = path.join(DATA_DIR, 'apps.json');

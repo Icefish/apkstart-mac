@@ -116,7 +116,12 @@ class EmulatorEngine {
   /** emulator.exe 与系统镜像目录（优先用户运行时目录，回退到仓库内 engine/） */
   locate() {
     const p = this.provisioner.paths();
-    const emuCandidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe')];
+    const emuBin = process.platform === 'win32' ? 'emulator.exe' : 'emulator';
+    const emuCandidates = [
+      p.emulatorExe,
+      path.join(this.appRoot, 'engine', 'emulator', emuBin),
+      path.join(this.appRoot, 'runtime', 'emulator', emuBin),
+    ];
     const emulatorExe = emuCandidates.find((c) => fs.existsSync(c)) || '';
     const img = this.provisioner.systemImageInfo();
     return { emulatorExe, sysImgDir: img.dir, sysImgOk: img.ok, root: emulatorExe ? path.dirname(path.dirname(emulatorExe)) : p.root };
@@ -231,7 +236,7 @@ class EmulatorEngine {
   }
 
   async killOrphanProcesses({ onLog = () => {} } = {}) {
-    if (process.platform !== 'win32') return 0;
+    if (process.platform !== 'win32' && process.platform !== 'darwin') return 0;
     const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
 
     // 快速路径（每次冷启动都会走到）：
@@ -256,21 +261,31 @@ class EmulatorEngine {
       }
     } catch (_) { /* ignore */ }
     // 2) 兜底：按进程名 + 端口找活着的 qemu（tasklist/netstat 比 wmic 快一个量级）
-    try {
-      const [tl, ns] = await Promise.all([
-        new Promise((res) => execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (e, o) => res(e ? '' : String(o || '')))),
-        new Promise((res) => execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (e, o) => res(e ? '' : String(o || '')))),
-      ]);
-      const qemuPids = new Set();
-      for (const line of tl.split('\n')) {
-        const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
-        if (m && /qemu|emulator/i.test(m[1])) qemuPids.add(m[2]);
-      }
-      for (const line of ns.split('\n')) {
-        const m = /:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
-        if (m && qemuPids.has(m[2])) pids.add(Number(m[2]));
-      }
-    } catch (_) { /* 拿不到进程列表就只靠锁文件里的 pid */ }
+    if (process.platform === 'win32') {
+      try {
+        const [tl, ns] = await Promise.all([
+          new Promise((res) => execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (e, o) => res(e ? '' : String(o || '')))),
+          new Promise((res) => execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (e, o) => res(e ? '' : String(o || '')))),
+        ]);
+        const qemuPids = new Set();
+        for (const line of tl.split('\n')) {
+          const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
+          if (m && /qemu|emulator/i.test(m[1])) qemuPids.add(m[2]);
+        }
+        for (const line of ns.split('\n')) {
+          const m = /:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+          if (m && qemuPids.has(m[2])) pids.add(Number(m[2]));
+        }
+      } catch (_) { /* 拿不到进程列表就只靠锁文件里的 pid */ }
+    } else {
+      try {
+        const out = await new Promise((res) => execFile('lsof', ['-iTCP:5554-5620', '-sTCP:LISTEN', '-Fp'], (e, o) => res(e ? '' : String(o || ''))));
+        for (const line of out.split('\n')) {
+          const m = /^p(\d+)/.exec(line.trim());
+          if (m) pids.add(Number(m[1]));
+        }
+      } catch (_) { /* ignore */ }
+    }
     pids.delete(process.pid);
     if (!pids.size) {
       this.clearLocks(avdDir);
@@ -278,7 +293,12 @@ class EmulatorEngine {
     }
     onLog(`清理 ${pids.size} 个残留模拟器进程`);
     await Promise.all([...pids].map((pid) => new Promise((r) => {
-      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => r());
+      if (process.platform === 'win32') {
+        execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => r());
+      } else {
+        try { process.kill(pid, 'SIGKILL'); } catch (_) {}
+        r();
+      }
     })));
     await sleep(1200);
     this.clearLocks(avdDir);
@@ -582,24 +602,32 @@ class EmulatorEngine {
     }
   }
 
-  /** emulator 自带 qemu-img.exe：把原始镜像文件撑到目标大小（稀疏，瞬间完成）
+  /** emulator 自带 qemu-img：把原始镜像文件撑到目标大小（稀疏，瞬间完成）
    *  注意参数顺序：`qemu-img <命令> -f raw <文件> <大小>`。
    *  把 -f 放命令前面会被它当成全局参数直接报 unrecognized option。 */
   _qemuImg(op, ...rest) {
-    const exe = path.join(path.dirname(this.locate().emulatorExe), 'qemu-img.exe');
+    const qemuImgBin = process.platform === 'win32' ? 'qemu-img.exe' : 'qemu-img';
+    const emuDir = path.dirname(this.locate().emulatorExe);
+    let exe = path.join(emuDir, qemuImgBin);
+    if (!fs.existsSync(exe)) {
+      exe = path.join(path.dirname(emuDir), 'qemu', qemuImgBin);
+    }
     const r = spawnSync(exe, [op, '-f', 'raw', ...rest], {
-      cwd: path.dirname(exe), windowsHide: true, encoding: 'utf8',
+      cwd: fs.existsSync(exe) ? path.dirname(exe) : emuDir, windowsHide: process.platform === 'win32', encoding: 'utf8',
     });
     if (r.status !== 0) throw new Error(`qemu-img ${op} 失败: ${(r.stderr || '').trim() || r.status}`);
   }
 
-  /** emulator 自带 resize2fs.exe（cygwin 版，必须在 bin64 目录下跑才能找到 DLL） */
+  /** emulator 自带 resize2fs（cygwin 版在 bin64 目录下跑，macOS/Linux 可在 PATH 或 bin64） */
   _resize2fs(img) {
+    const resizeBin = process.platform === 'win32' ? 'resize2fs.exe' : 'resize2fs';
     const bin = path.join(path.dirname(this.locate().emulatorExe), 'bin64');
-    const exe = path.join(bin, 'resize2fs.exe');
-    if (!fs.existsSync(exe)) throw new Error('缺少 resize2fs.exe');
+    let exe = path.join(bin, resizeBin);
+    if (!fs.existsSync(exe)) {
+      exe = resizeBin;
+    }
     const r = spawnSync(exe, [img], {
-      cwd: bin, windowsHide: true, encoding: 'utf8', timeout: 180000,
+      cwd: fs.existsSync(bin) ? bin : undefined, windowsHide: process.platform === 'win32', encoding: 'utf8', timeout: 180000,
     });
     if (r.status !== 0) throw new Error(`resize2fs 失败: ${(r.stderr || '').trim() || r.status}`);
   }
@@ -732,6 +760,7 @@ class EmulatorEngine {
     }
     if (wipe) args.push('-wipe-data');
     if (accel === 'off') args.push('-accel', 'off');
+    else if (process.platform === 'darwin') args.push('-accel', 'hvf');
     // 驱动声明的其它参数：-gpu / -accel 已经由上面的 gpu/accel 统一处理，这里跳过，
     // 避免同一个参数出现两次（emulator 对重复参数的行为在不同版本上不一致）。
     for (const a of ((eff && eff.args) || [])) {
@@ -756,7 +785,7 @@ class EmulatorEngine {
     const proc = spawn(loc.emulatorExe, args, {
       cwd: path.dirname(loc.emulatorExe),
       env,
-      windowsHide: true,
+      windowsHide: process.platform === 'win32',
       // detached: 让模拟器独立于 ApkStart 进程组。
       // Electron 退出时会把自己创建的 job 对象关掉，顺带把子进程一起杀掉——
       // 表现就是"关掉 ApkStart 再打开又要冷启动 20 多秒"。独立出去之后模拟器留着，
@@ -910,6 +939,8 @@ class EmulatorEngine {
       try { proc.kill(); } catch (_) { /* ignore */ }
       if (process.platform === 'win32' && proc.pid) {
         try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (_) { /* ignore */ }
+      } else if (proc.pid) {
+        try { process.kill(proc.pid, 'SIGKILL'); } catch (_) { /* ignore */ }
       }
     }
     await sleep(800);

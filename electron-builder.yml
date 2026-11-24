@@ -17,6 +17,8 @@ files:
   # 运行时解压 .xz 镜像用（NAPI 预编译，无 ABI 问题）
   - "node_modules/@napi-rs/lzma/**"
   - "node_modules/@napi-rs/lzma-win32-x64-msvc/**"
+  - "node_modules/@napi-rs/lzma-darwin-x64/**"
+  - "node_modules/@napi-rs/lzma-darwin-arm64/**"
   - "!node_modules/@napi-rs/lzma/*.md"
   - "!node_modules/@napi-rs/lzma/*.ts"
   - "!node_modules/@napi-rs/lzma/browser-entry.*"
@@ -113,3 +115,24 @@ linux:
       Name: ApkStart
       Comment: 在 FydeOS / Linux 上管理安卓应用
       Categories: Utility;
+
+# ---------------- macOS (Intel x64 & Apple Silicon arm64) ----------------
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.utilities
+  icon: src/ui/assets/appicon.icns
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  fileAssociations:
+    - ext: apk
+      name: Android Package
+      role: Viewer
+

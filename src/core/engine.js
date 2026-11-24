@@ -124,7 +124,7 @@ class Runtime {
     // 自带 adb 永远排在第一位：同一台设备只认一份 adb 状态，不会出现 offline 反复抖动。
     if (fs.existsSync(p.adbExe)) return p.adbExe;
     if (s.adbPath && fs.existsSync(s.adbPath)) return s.adbPath;
-    const local = path.join(this.appRoot, 'tools', 'platform-tools', 'adb.exe');
+    const local = path.join(this.appRoot, 'tools', 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb');
     if (fs.existsSync(local)) return local;
     return AdbClient.resolveAdb('', this.appRoot);
   }
@@ -754,7 +754,12 @@ class Runtime {
         const pid = await this.pidOnPort(port);
         if (pid) {
           await new Promise((resolve) => {
-            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+            if (process.platform === 'win32') {
+              execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+            } else {
+              try { process.kill(pid, 'SIGKILL'); } catch (_) { /* ignore */ }
+              resolve();
+            }
           });
         }
       }
@@ -865,20 +870,30 @@ class Runtime {
       });
     });
     const ports = new Set();
-    try {
-      const tl = await run('tasklist', ['/FO', 'CSV', '/NH']);
-      const pids = new Set();
-      for (const line of tl.split('\n')) {
-        const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
-        if (m && /qemu|emulator/i.test(m[1])) pids.add(m[2]);
-      }
-      if (!pids.size) return [];
-      const ns = await run('netstat', ['-ano', '-p', 'TCP']);
-      for (const line of ns.split('\n')) {
-        const m = /:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
-        if (m && pids.has(m[2])) ports.add(Number(m[1]));
-      }
-    } catch (_) { /* 退回到端口探测 */ }
+    if (process.platform === 'win32') {
+      try {
+        const tl = await run('tasklist', ['/FO', 'CSV', '/NH']);
+        const pids = new Set();
+        for (const line of tl.split('\n')) {
+          const m = /^"([^"]+)","(\d+)"/.exec(line.trim());
+          if (m && /qemu|emulator/i.test(m[1])) pids.add(m[2]);
+        }
+        if (!pids.size) return [];
+        const ns = await run('netstat', ['-ano', '-p', 'TCP']);
+        for (const line of ns.split('\n')) {
+          const m = /:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+          if (m && pids.has(m[2])) ports.add(Number(m[1]));
+        }
+      } catch (_) { /* 退回到端口探测 */ }
+    } else {
+      try {
+        const out = await run('lsof', ['-iTCP:5554-5620', '-sTCP:LISTEN', '-P', '-n']);
+        for (const line of out.split('\n')) {
+          const m = /:(\d+)\s+\(LISTEN\)/i.exec(line);
+          if (m) ports.add(Number(m[1]));
+        }
+      } catch (_) { /* 退回到端口探测 */ }
+    }
 
     if (ports.size) {
       // 控制台端口（偶数）和 adb 端口（+1）都会被监听，只保留控制台端口
@@ -929,8 +944,13 @@ class Runtime {
         const pid = await this.pidOnPort(port);
         if (pid) {
           await new Promise((resolve) => {
-            const { execFile } = require('child_process');
-            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+            if (process.platform === 'win32') {
+              const { execFile } = require('child_process');
+              execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+            } else {
+              try { process.kill(pid, 'SIGKILL'); } catch (_) { /* ignore */ }
+              resolve();
+            }
           });
         }
         await new Promise((r) => setTimeout(r, 1200));
@@ -951,12 +971,20 @@ class Runtime {
   async pidOnPort(port) {
     return new Promise((resolve) => {
       const { execFile } = require('child_process');
-      execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true }, (err, stdout) => {
-        if (err || !stdout) return resolve(0);
-        const line = stdout.split('\n').find((l) => new RegExp(`:${port}\\s`).test(l) && /LISTENING/i.test(l));
-        const m = line && /(\d+)\s*$/.exec(line.trim());
-        return resolve(m ? Number(m[1]) : 0);
-      });
+      if (process.platform === 'win32') {
+        execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true }, (err, stdout) => {
+          if (err || !stdout) return resolve(0);
+          const line = stdout.split('\n').find((l) => new RegExp(`:${port}\\s`).test(l) && /LISTENING/i.test(l));
+          const m = line && /(\d+)\s*$/.exec(line.trim());
+          return resolve(m ? Number(m[1]) : 0);
+        });
+      } else {
+        execFile('lsof', ['-iTCP:' + port, '-sTCP:LISTEN', '-Fp'], (err, stdout) => {
+          if (err || !stdout) return resolve(0);
+          const m = /p(\d+)/.exec(stdout);
+          return resolve(m ? Number(m[1]) : 0);
+        });
+      }
     });
   }
 

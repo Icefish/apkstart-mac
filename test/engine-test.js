@@ -149,8 +149,9 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
   await test('默认运行时目录位于数据目录下', async () => {
     const p = new Provisioner('C:/fake/app');
     assert(p.paths().root.startsWith(store.DATA_DIR), `路径异常: ${p.paths().root}`);
-    assert(p.paths().qemuExe.endsWith('qemu-system-x86_64.exe'), 'qemu 路径异常');
-    assert(p.paths().adbExe.endsWith('adb.exe'), 'adb 路径异常');
+    const isWin = process.platform === 'win32';
+    assert(p.paths().qemuExe.endsWith(isWin ? 'qemu-system-x86_64.exe' : 'qemu-system-x86_64'), 'qemu 路径异常');
+    assert(p.paths().adbExe.endsWith(isWin ? 'adb.exe' : 'adb'), 'adb 路径异常');
   });
 
   await test('空环境检查：adb 未就绪，组件结构完整', async () => {
@@ -216,7 +217,12 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
       assert(/^https?:\/\//i.test(u), `不是绝对 URL: ${u}`);
       assert(/\.zip$/i.test(u), `不是 zip 包: ${u}`);
     }
-    assert(/windows_x64/i.test(emuUrl), `emulator 包平台不对: ${emuUrl}`);
+    const platPattern = process.platform === 'win32'
+      ? /windows_x64/i
+      : process.platform === 'darwin'
+        ? /darwin_x64/i
+        : /linux_x64/i;
+    assert(platPattern.test(emuUrl), `emulator 包平台不对: ${emuUrl}`);
   });
 
   await test('AVD 配置使用 64 位架构（x86_64 不能被截成 x86）', async () => {
@@ -226,7 +232,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '断言失败'); 
     const cfg = fs.readFileSync(path.join(r.avdDir, 'config.ini'), 'utf8');
     assert(/^hw\.cpu\.arch=x86_64$/m.test(cfg), `hw.cpu.arch 应为 x86_64，实际：${cfg.match(/^hw\.cpu\.arch=.*$/m)}`);
     assert(/^abi\.type=x86_64$/m.test(cfg), 'abi.type 应为 x86_64');
-    assert(/^image\.sysdir\.1=\S*system-images\//m.test(cfg), 'image.sysdir.1 缺失');
+    assert(/^image\.sysdir\.1=.*system-images[/\\]/m.test(cfg), 'image.sysdir.1 缺失');
   });
 
   await test('安装失败原因翻译：NO_MATCHING_ABIS 给出中文指引', async () => {

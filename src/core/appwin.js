@@ -324,6 +324,13 @@ class AppWindow {
    * netsimd 的控制台黑窗）继续压住 —— 关了反而会给它们再露一次脸的机会。
    * 模拟器窗口偶尔还没创建好（快照恢复太快的机器上），这里重试两次。
    */
+  _openDetachedMac() {
+    try { this.win.hide(); } catch (_) { /* ignore */ }
+    try { require('child_process').execFile('osascript', ['-e', 'tell application "System Events" to set frontmost of (first process whose name contains "qemu" or name contains "emulator") to true']); } catch (_) {}
+    this.lastEmbedOk = true;
+    return true;
+  }
+
   /**
    * 独立窗口模式：**不**把模拟器嵌进我们窗口，而是让它开自己的原生窗口。
    *
@@ -346,6 +353,8 @@ class AppWindow {
     // 壳窗口在独立模式下绝不能露脸（它没有内容，只会是一块黑）。
     // 但 showWhileWaiting 时它现在是可见的「等待提示」，这里负责收起它。
     try { this.win.hide(); } catch (_) { /* ignore */ }
+    if (process.platform === 'darwin') return this._openDetachedMac();
+
     // 先确保它没被嵌在里面（从嵌入切过来时 _emu 的父窗口还是宿主）。
     // keep=true：告诉代理这是「切独立窗口」，不是「结束嵌入」——否则它会把
     // 用户正在看的模拟器窗口当成杂物藏掉。

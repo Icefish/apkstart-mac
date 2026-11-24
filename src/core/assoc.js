@@ -45,6 +45,7 @@ function readPrev() {
 }
 
 function notifyShell() {
+  if (process.platform !== 'win32') return;
   const ps = `
 $sig = '[DllImport("shell32.dll")] public static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);';
 try {
@@ -65,6 +66,9 @@ try {
  * @param {string} [extraArgs] 开发模式下需要先传应用目录，例如 "\"C:\\path\\apkstart\""
  */
 function registerAssociation(exePath, iconPath, extraArgs) {
+  if (process.platform !== 'win32') {
+    return { ok: true, progId: PROGID, previous: '' };
+  }
   const icon = iconPath || exePath;
   const command = `"${exePath}" ${extraArgs ? extraArgs + ' ' : ''}"%1"`;
 
@@ -99,6 +103,9 @@ function registerAssociation(exePath, iconPath, extraArgs) {
  *  3) 当前默认值是别人的 → 一个字节都不动。
  */
 function unregisterAssociation() {
+  if (process.platform !== 'win32') {
+    return { ok: true, restored: '' };
+  }
   reg(['delete', `${CLASSES}\\${EXT}\\OpenWithProgids`, '/v', PROGID, '/f']);
   reg(['delete', `${CLASSES}\\${PROGID}`, '/f']);
 

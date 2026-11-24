@@ -41,10 +41,18 @@ function tabletDensity() {
  * 继承别人的 server 状态（端口、授权、offline 抖动），与「独立运行」冲突。
  * 自己那份 adb 在运行时目录里，优先级永远最高（见 engine.adbPath）。
  */
-const COMMON_ADB_PATHS = [
+const COMMON_ADB_PATHS = process.platform === 'win32' ? [
   path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
   'C:/Android/platform-tools/adb.exe',
   'C:/adb/adb.exe',
+] : process.platform === 'darwin' ? [
+  path.join(os.homedir(), 'Library', 'Android', 'sdk', 'platform-tools', 'adb'),
+  '/usr/local/bin/adb',
+  '/opt/homebrew/bin/adb',
+] : [
+  path.join(os.homedir(), 'Android', 'Sdk', 'platform-tools', 'adb'),
+  '/usr/bin/adb',
+  '/usr/local/bin/adb',
 ];
 
 /**
@@ -248,9 +256,10 @@ class AdbClient {
   }
 
   static resolveAdb(explicit, appRoot) {
+    const adbBin = process.platform === 'win32' ? 'adb.exe' : 'adb';
     const candidates = [
       explicit,
-      appRoot && path.join(appRoot, 'tools', 'platform-tools', 'adb.exe'),
+      appRoot && path.join(appRoot, 'tools', 'platform-tools', adbBin),
       ...COMMON_ADB_PATHS,
     ].filter(Boolean);
     for (const c of candidates) {

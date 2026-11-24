@@ -2927,6 +2927,14 @@ if (!gotLock) {
     showWindow();
   });
 
+  // macOS Finder 双击 .apk 文件时唤起安装
+  app.on('open-file', (_evt, filePath) => {
+    _evt.preventDefault();
+    if (filePath && /\.apk$/i.test(filePath)) {
+      runInstall(filePath).catch(() => {});
+    }
+  });
+
   app.whenReady().then(async () => {
     store.ensureDirs();
     /**
@@ -3044,10 +3052,12 @@ if (!gotLock) {
       isDev: IS_DEV,
       desktopDir: app.getPath('desktop'),
       // Windows 搜索索引的是开始菜单里的 .lnk，只放桌面会「搜不到应用」；
-      // Linux 那边对应的是 freedesktop 的应用菜单目录。
+      // macOS 对应用户 Applications 目录，Linux 对应 freedesktop 的应用菜单目录。
       startMenuDir: process.platform === 'win32'
         ? path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
-        : path.join(process.env.HOME || app.getPath('home'), '.local', 'share', 'applications'),
+        : process.platform === 'darwin'
+          ? path.join(app.getPath('home'), 'Applications')
+          : path.join(process.env.HOME || app.getPath('home'), '.local', 'share', 'applications'),
       decodeIcon,
     });
     sharer = new Sharer(runtime);

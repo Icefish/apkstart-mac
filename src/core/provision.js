@@ -20,7 +20,11 @@ const IS_WIN = process.platform === 'win32';
 
 const SOURCES = {
   adb: [
-    'https://dl.google.com/android/repository/platform-tools-latest-windows.zip',
+    IS_WIN
+      ? 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip'
+      : process.platform === 'darwin'
+        ? 'https://dl.google.com/android/repository/platform-tools-latest-darwin.zip'
+        : 'https://dl.google.com/android/repository/platform-tools-latest-linux.zip',
   ],
   qemuIndex: 'https://qemu.weilnetz.de/w64/',
   qemuFallback: [
@@ -34,11 +38,21 @@ const SOURCES = {
   ],
   aehdFallback: 'https://dl.google.com/android/repository/aehd-windows_v2.2.zip',
   // 兜底：索引不可用时直接用的已知版本
-  emulatorFallback: 'https://dl.google.com/android/repository/emulator-windows_x64-16847572.zip',
-  sysimgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
+  emulatorFallback: IS_WIN
+    ? 'https://dl.google.com/android/repository/emulator-windows_x64-16847572.zip'
+    : process.platform === 'darwin'
+      ? (process.arch === 'arm64'
+          ? 'https://dl.google.com/android/repository/emulator-darwin_aarch64-16847572.zip'
+          : 'https://dl.google.com/android/repository/emulator-darwin_x64-16847572.zip')
+      : 'https://dl.google.com/android/repository/emulator-linux_x64-16847572.zip',
+  sysimgFallback: process.arch === 'arm64'
+    ? 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-34_r14.zip'
+    : 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
   // ARM 兼容镜像（Google Play 版，内置 native bridge）
   playImgIndex: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/sys-img2-3.xml',
-  playImgFallback: 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
+  playImgFallback: process.arch === 'arm64'
+    ? 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/arm64-v8a-34_r14.zip'
+    : 'https://dl.google.com/android/repository/sys-img/google_apis_playstore/x86_64-34_r14.zip',
   // Android-x86 9.0-r2（x86_64）：仅在用户已自备 ISO 时使用
   iso: [
     'https://master.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso?viasf=1',
@@ -89,7 +103,7 @@ function absUrl(u, base = REPO_BASE) {
  * 现在统一为 Android 14 Google Play x86_64：x86 应用、ARM 应用、GMS 都能跑，
  * 全机只存一份只读基础层（容器式共享），按需下载一次即可。
  */
-const PLAY_SYSIMG = { api: '34', tag: 'google_apis_playstore', abi: 'x86_64' };
+const PLAY_SYSIMG = { api: '34', tag: 'google_apis_playstore', abi: process.arch === 'arm64' ? 'arm64-v8a' : 'x86_64' };
 const DEFAULT_SYSIMG = PLAY_SYSIMG;
 
 const MIN_SIZE = {
@@ -291,13 +305,15 @@ class Provisioner {
       // 只有可写时才把临时目录/辅助目录放在 root 下，否则一律改用数据目录
       writeRoot: rootWritable ? root : path.join(store.DATA_DIR, 'runtime'),
       qemuDir: path.join(root, 'qemu'),
-      qemuExe: path.join(root, 'qemu', 'qemu-system-x86_64.exe'),
-      qemuImg: path.join(root, 'qemu', 'qemu-img.exe'),
+      qemuExe: path.join(root, 'qemu', IS_WIN
+        ? 'qemu-system-x86_64.exe'
+        : (process.arch === 'arm64' ? 'qemu-system-aarch64' : 'qemu-system-x86_64')),
+      qemuImg: path.join(root, 'qemu', IS_WIN ? 'qemu-img.exe' : 'qemu-img'),
       adbDir: path.join(root, 'platform-tools'),
-      adbExe: path.join(root, 'platform-tools', 'adb.exe'),
+      adbExe: path.join(root, 'platform-tools', IS_WIN ? 'adb.exe' : 'adb'),
       // emulator 运行时（Google 官方）：root 同时充当 ANDROID_SDK_ROOT
       emulatorDir: path.join(root, 'emulator'),
-      emulatorExe: path.join(root, 'emulator', 'emulator.exe'),
+      emulatorExe: path.join(root, 'emulator', IS_WIN ? 'emulator.exe' : 'emulator'),
       sysImgRoot: sysRoot,
       sysImgDir: path.join(sysRoot, `android-${sysApi}`, sysTag, sysAbi),
       avdHome: insideData ? path.join(root, 'avd') : writable,
@@ -352,6 +368,22 @@ class Provisioner {
 
   async hypervisor() {
     if (this._hypervisor !== null) return this._hypervisor;
+    if (process.platform === 'darwin') {
+      let hvf = false;
+      try {
+        const { execFileSync } = require('child_process');
+        const out = execFileSync('sysctl', ['-n', 'kern.hv_support'], { encoding: 'utf8', timeout: 3000 }).trim();
+        hvf = out === '1';
+      } catch (_) {
+        hvf = process.arch === 'x64' || process.arch === 'arm64';
+      }
+      this._hypervisor = {
+        hvf,
+        whpx: false,
+        note: hvf ? 'macOS Hypervisor (HVF) 硬件加速已支持' : '未检测到 macOS Hypervisor 虚拟化支持',
+      };
+      return this._hypervisor;
+    }
     if (!IS_WIN) { this._hypervisor = { whpx: false, note: '非 Windows 平台' }; return this._hypervisor; }
     // 只做毫秒级的文件检查。真正"WHPX 是否可用"由 emulator -accel-check 给出权威答案，
     // 避免在这里拉起 PowerShell（冷启动 1-2 秒）拖慢每次状态轮询。
@@ -371,7 +403,8 @@ class Provisioner {
     // 30s 缓存，避免状态轮询频繁拉起外部进程
     if (this._adbCache && Date.now() - this._adbCache.at < 30000) return this._adbCache.value;
     const { adbExe, adbDir } = this.paths();
-    const candidates = [adbExe, path.join(this.appRoot, 'tools', 'platform-tools', 'adb.exe')];
+    const adbBin = IS_WIN ? 'adb.exe' : 'adb';
+    const candidates = [adbExe, path.join(this.appRoot, 'tools', 'platform-tools', adbBin)];
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
       const r = await run(c, ['version'], { timeout: 10000 });
@@ -703,6 +736,11 @@ class Provisioner {
         } else {
           fs.writeFileSync(target, zip.read(name));
         }
+        if (process.platform !== 'win32') {
+          if (!path.extname(target) || /\.(sh|bin)$/i.test(target) || /emulator|adb|qemu|crashreport/i.test(path.basename(target))) {
+            try { fs.chmodSync(target, 0o755); } catch (_) { /* ignore */ }
+          }
+        }
         done += 1;
         if (opts.onEntry) opts.onEntry(name, done, total);
       }
@@ -757,10 +795,15 @@ class Provisioner {
       if (block) {
         const base = baseOf(SOURCES.sdkIndex);
         const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base));
-        const win = urls.find((u) => /windows_x64.*\.zip$/i.test(u));
-        if (win) {
-          this._cache.emulatorUrl = win;
-          return win;
+        const pattern = IS_WIN
+          ? /windows_x64.*\.zip$/i
+          : process.platform === 'darwin'
+            ? (process.arch === 'arm64' ? /darwin_(aarch64|arm64).*\.zip$/i : /darwin_x64.*\.zip$/i)
+            : /linux_x64.*\.zip$/i;
+        const matched = urls.find((u) => pattern.test(u));
+        if (matched) {
+          this._cache.emulatorUrl = matched;
+          return matched;
         }
       }
     } catch (_) { /* 落兜底 */ }
@@ -782,8 +825,9 @@ class Provisioner {
         const block = re.exec(xml);
         if (block) {
           const base = baseOf(idx);
+          const abiPattern = new RegExp(`${DEFAULT_SYSIMG.abi}.*\\.zip$`, 'i');
           const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base))
-            .filter((u) => /x86_64.*\.zip$/i.test(u));
+            .filter((u) => abiPattern.test(u));
           if (urls.length) {
             this._cache.sysimgUrl = urls[urls.length - 1];
             return this._cache.sysimgUrl;
@@ -800,7 +844,8 @@ class Provisioner {
       return this._cache.emulatorVersion;
     }
     const p = this.paths();
-    const candidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe')];
+    const emuBin = IS_WIN ? 'emulator.exe' : 'emulator';
+    const candidates = [p.emulatorExe, path.join(this.appRoot, 'engine', 'emulator', emuBin)];
     for (const c of candidates) {
       if (!fs.existsSync(c)) continue;
       // 上一次会话探测过、且引擎文件没变：直接用落盘结果（省掉一次 1s+ 的进程拉起）
@@ -1020,7 +1065,7 @@ class Provisioner {
     }
     const p = this.paths();
     const exe = fs.existsSync(p.emulatorExe) ? p.emulatorExe
-      : path.join(this.appRoot, 'engine', 'emulator', 'emulator.exe');
+      : path.join(this.appRoot, 'engine', 'emulator', IS_WIN ? 'emulator.exe' : 'emulator');
     if (!fs.existsSync(exe)) return { ok: false, kind: 'none', note: '未安装 emulator' };
 
     // 落盘缓存：冷启动时不再为这一项拉起 emulator 进程。
@@ -1033,6 +1078,21 @@ class Provisioner {
         this._cache.accelAt = Date.now();
         return cached.accel;
       }
+    }
+
+    if (process.platform === 'darwin') {
+      const r = await run(exe, ['-accel-check'], { timeout: 30000 });
+      const text = `${r.stdout}${r.stderr}`;
+      const usable = /accel:\s*\n?0\b/.test(text) || !/not installed|failed/i.test(text);
+      const result = {
+        ok: usable,
+        kind: 'hvf',
+        note: usable ? 'macOS Hypervisor (HVF) 硬件加速已启用' : '未启用硬件加速：将回退软件模拟',
+      };
+      this._cache.accel = result;
+      this._cache.accelAt = Date.now();
+      this.envCacheSet(exe, { accel: result, accelAt: Date.now() });
+      return result;
     }
 
     const aehdSys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'aehd.sys');

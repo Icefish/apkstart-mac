@@ -137,11 +137,81 @@ async function iconToIco(raw, { decode, onFallback } = {}) {
 }
 
 /**
- * 快捷方式的扩展名：Windows 是 .lnk，Linux（FydeOS / ChromeOS 的 Linux 子系统、
+ * 快捷方式的扩展名：Windows 是 .lnk，macOS 是 .app，Linux（FydeOS / ChromeOS 的 Linux 子系统、
  * 各种发行版）是 .desktop（freedesktop 规范）。
  */
 function shortcutExt() {
-  return process.platform === 'win32' ? '.lnk' : '.desktop';
+  if (process.platform === 'win32') return '.lnk';
+  if (process.platform === 'darwin') return '.app';
+  return '.desktop';
+}
+
+/**
+ * 写一个 macOS .app 启动项（Application Bundle）。
+ * 包含 Contents/MacOS/launcher 启动脚本、Contents/Info.plist 与 Contents/Resources/app.icns 图标，
+ * 使生成的快捷方式在 Spotlight、Raycast、Alfred、Launchpad 与 Dock 中能像原生应用一样运行。
+ *
+ * @param {object} opt { shortcutPath, target, args, iconPngPath, description, appUserModelId }
+ */
+function writeMacAppShortcut(opt) {
+  const { execFileSync } = require('child_process');
+  let appDir = opt.shortcutPath;
+  if (!appDir.endsWith('.app')) appDir += '.app';
+  const contents = path.join(appDir, 'Contents');
+  const macOs = path.join(contents, 'MacOS');
+  const res = path.join(contents, 'Resources');
+  try {
+    fs.mkdirSync(macOs, { recursive: true });
+    fs.mkdirSync(res, { recursive: true });
+  } catch (e) {
+    throw new Error(`快捷方式目录不可写：${appDir}（${e.message}）`);
+  }
+
+  // 图标转换：使用 macOS 自带 sips 工具将 PNG 转为 ICNS
+  const icnsPath = path.join(res, 'app.icns');
+  if (opt.iconPngPath && fs.existsSync(opt.iconPngPath)) {
+    try {
+      execFileSync('sips', ['-s', 'format', 'icns', opt.iconPngPath, '--out', icnsPath], { stdio: 'ignore', timeout: 5000 });
+    } catch (_) { /* 转换失败不阻塞 */ }
+  }
+
+  // 启动脚本
+  const quote = (s) => `"${String(s).replace(/(["\\$`])/g, '\\$1')}"`;
+  const argv = String(opt.args || '').match(/"[^"]*"|\S+/g) || [];
+  const execLine = [quote(opt.target), ...argv.map((a) => quote(a.replace(/^"|"$/g, '')))].join(' ');
+  const launcherPath = path.join(macOs, 'launcher');
+  const scriptContent = `#!/bin/bash\nexec ${execLine} "$@"\n`;
+  fs.writeFileSync(launcherPath, scriptContent, { encoding: 'utf8', mode: 0o755 });
+  try { fs.chmodSync(launcherPath, 0o755); } catch (_) { /* ignore */ }
+
+  // Info.plist
+  const appName = String(opt.description || 'Android App').split('—')[0].trim();
+  const appId = opt.appUserModelId || `com.apkstart.${safeFileName(appName)}`;
+  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>launcher</string>
+    <key>CFBundleIconFile</key>
+    <string>app.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>${appId}</string>
+    <key>CFBundleName</key>
+    <string>${appName}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+</dict>
+</plist>`;
+  fs.writeFileSync(path.join(contents, 'Info.plist'), plistContent, 'utf8');
+
+  try { execFileSync('touch', [appDir], { stdio: 'ignore' }); } catch (_) { /* ignore */ }
+  if (!fs.existsSync(appDir)) {
+    throw new Error(`快捷方式未落盘：${appDir}`);
+  }
+  return appDir;
 }
 
 /**
@@ -197,6 +267,9 @@ function writeDesktopEntry(opt) {
  * @param {object} opt { shortcutPath, target, args, iconIcoPath, description, cwd }
  */
 function writeShortcut(opt) {
+  if (process.platform === 'darwin') {
+    return writeMacAppShortcut(opt);
+  }
   // Linux / FydeOS：走 .desktop，不用 Windows 的 COM 接口
   if (process.platform !== 'win32') {
     return writeDesktopEntry({
@@ -235,7 +308,13 @@ function writeShortcut(opt) {
 
 function removeShortcut(p) {
   try {
-    if (p && fs.existsSync(p)) fs.unlinkSync(p);
+    if (p && fs.existsSync(p)) {
+      if (fs.statSync(p).isDirectory()) {
+        fs.rmSync(p, { recursive: true, force: true });
+      } else {
+        fs.unlinkSync(p);
+      }
+    }
     return true;
   } catch (_) {
     return false;

@@ -23,6 +23,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const doctor = require('./doctor');
 
 // ---------------- 探测 ----------------
 
@@ -104,6 +105,62 @@ function dateToISO(v) {
  * @returns {object} hw
  */
 async function collect({ accel = null } = {}) {
+  if (process.platform === 'darwin') {
+    let kernHv = false;
+    let cpuModel = '';
+    let cpuFeatures = '';
+    try {
+      const { execFileSync } = require('child_process');
+      kernHv = execFileSync('sysctl', ['-n', 'kern.hv_support'], { encoding: 'utf8', timeout: 3000 }).trim() === '1';
+      cpuModel = execFileSync('sysctl', ['-n', 'machdep.cpu.brand_string'], { encoding: 'utf8', timeout: 3000 }).trim();
+      cpuFeatures = execFileSync('sysctl', ['-n', 'machdep.cpu.features'], { encoding: 'utf8', timeout: 3000 }).trim();
+    } catch (_) {}
+    const cpus = os.cpus() || [];
+    const totalMem = os.totalmem();
+    const vendor = doctor.detectGpuVendor();
+    const hasVmx = /VMX/i.test(cpuFeatures) || process.arch === 'arm64' || kernHv;
+    const accelOk = !!(accel && accel.ok !== false);
+    return {
+      platform: 'darwin',
+      arch: process.arch,
+      osBuild: (() => {
+        const m = /(\d+)\s*$/.exec(os.release() || '');
+        return m ? Number(m[1]) : 0;
+      })(),
+      cpu: {
+        name: cpuModel || (cpus[0] && cpus[0].model) || 'Mac CPU',
+        cores: cpus.length,
+        threads: cpus.length,
+        vtSupported: hasVmx,
+        vtFirmware: hasVmx,
+        slat: hasVmx,
+      },
+      memory: {
+        totalMB: Math.round(totalMem / 1048576),
+        freeMB: Math.round(os.freemem() / 1048576),
+      },
+      gpu: {
+        name: vendor === 'apple' ? 'Apple Silicon GPU' : (vendor === 'intel' ? 'Intel Integrated GPU' : (vendor === 'amd' ? 'AMD Radeon GPU' : 'macOS Display')),
+        vendor,
+        vramMB: 2048,
+        driverVersion: '',
+        driverDate: '',
+        status: 'OK',
+      },
+      virtualization: {
+        hypervisorPresent: kernHv,
+        hypervisorPlatform: kernHv ? 'enabled' : 'disabled',
+        vmPlatform: kernHv ? 'enabled' : 'disabled',
+        hyperV: 'unknown',
+        winHvApi: false,
+        vmCompute: false,
+        aehdInstalled: false,
+        accelOk,
+        accelKind: accel && accel.ok ? String(accel.kind || 'hvf') : (kernHv ? 'hvf' : 'none'),
+      },
+    };
+  }
+
   const [raw, feats] = process.platform === 'win32'
     ? await Promise.all([psJson(HW_SCRIPT), psJson(FEATURE_SCRIPT)])
     : [null, null];
