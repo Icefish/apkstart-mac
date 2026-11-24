@@ -157,8 +157,9 @@ function bootstrapBundledRuntime() {
       }
       return false;
     };
+    const emuBin = process.platform === 'win32' ? 'emulator.exe' : 'emulator';
     const bundled = candidates.find((dir) =>
-      fs.existsSync(path.join(dir, 'emulator', 'emulator.exe')) && hasImage(dir));
+      fs.existsSync(path.join(dir, 'emulator', emuBin)) && hasImage(dir));
     if (!bundled) return;
 
     const s = store.getSettings();
@@ -173,7 +174,7 @@ function bootstrapBundledRuntime() {
     // 用户自己挑的目录（D:\ApkStartRuntime 之类）不会被这条规则误伤。
     const looksForeignBundle = /[\\/]resources[\\/]runtime$/i.test(current)
       && !path.resolve(current).toLowerCase().startsWith(path.resolve(exeDir).toLowerCase());
-    if (looksForeignBundle && fs.existsSync(path.join(bundled, 'emulator', 'emulator.exe'))) {
+    if (looksForeignBundle && fs.existsSync(path.join(bundled, 'emulator', emuBin))) {
       store.saveSettings({ runtime: { dir: bundled } });
       bundledRuntimeDir = bundled;
       appLog(`运行时目录指向别的安装包（${current}），改用随包内置运行时 ${bundled}`);
