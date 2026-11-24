@@ -760,7 +760,7 @@ class EmulatorEngine {
     }
     if (wipe) args.push('-wipe-data');
     if (accel === 'off') args.push('-accel', 'off');
-    else if (process.platform === 'darwin') args.push('-accel', 'hvf');
+    else if (process.platform === 'darwin') args.push('-accel', 'auto');
     // 驱动声明的其它参数：-gpu / -accel 已经由上面的 gpu/accel 统一处理，这里跳过，
     // 避免同一个参数出现两次（emulator 对重复参数的行为在不同版本上不一致）。
     for (const a of ((eff && eff.args) || [])) {
