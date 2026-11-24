@@ -741,7 +741,8 @@ async function autoDeploy({ force = false } = {}) {
     // 轻量版优先用「本项目 GitHub 的运行时整包」：一个文件搞定 emulator + 系统镜像，
     // 下载源和更新源统一在 GitHub 上（国内比 dl.google.com 稳得多）。
     // 整包拿不到（没网 / 还没发过该资产 / 被限流）再逐个从官方源装。
-    if (needEngine && store.getSettings().runtime.preferGithubRuntime !== false) {
+    // 注意：GitHub 目前只有 Windows 版整包，macOS 必须直接走 Google 官方源，避免重复下载 1.4GB Windows 包。
+    if (needEngine && process.platform === 'win32' && store.getSettings().runtime.preferGithubRuntime !== false) {
       try {
         progress({ message: '正在从 GitHub 下载运行时…' });
         await runtime.provisioner.installRuntimePack(progress);

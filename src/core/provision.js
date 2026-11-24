@@ -543,18 +543,32 @@ class Provisioner {
     const p = this.ensureDirs();
     await this.guardDisk('adb', p.root);
     const zipPath = path.join(p.tmp, 'platform-tools.zip');
-    onProgress({ stage: 'download', message: '下载 Android platform-tools（约 8MB）…', percent: 2 });
 
-    await downloadAny(SOURCES.adb, zipPath, {
-      onProgress: (pr) => onProgress({
-        stage: 'download',
-        message: `下载 adb… ${(pr.got / 1048576).toFixed(1)}MB / ${(pr.total / 1048576).toFixed(1)}MB`,
-        percent: pr.percent,
-        speed: pr.speed,
-      }),
-    });
+    let needDownload = true;
+    if (fs.existsSync(zipPath) && fs.statSync(zipPath).size >= MIN_SIZE.adb) {
+      try {
+        const z = new ZipFile(zipPath);
+        if (z.names().length > 0) {
+          needDownload = false;
+          onProgress({ stage: 'download', message: '发现已缓存的 platform-tools 安装包，跳过下载…', percent: 90 });
+        }
+      } catch (_) {
+        try { fs.rmSync(zipPath, { force: true }); } catch (_) {}
+      }
+    }
 
-    assertComplete(zipPath, MIN_SIZE.adb, 'adb 安装包');
+    if (needDownload) {
+      onProgress({ stage: 'download', message: '下载 Android platform-tools（约 8MB）…', percent: 2 });
+      await downloadAny(SOURCES.adb, zipPath, {
+        onProgress: (pr) => onProgress({
+          stage: 'download',
+          message: `下载 adb… ${(pr.got / 1048576).toFixed(1)}MB / ${(pr.total / 1048576).toFixed(1)}MB`,
+          percent: pr.percent,
+          speed: pr.speed,
+        }),
+      });
+      assertComplete(zipPath, MIN_SIZE.adb, 'adb 安装包');
+    }
 
     onProgress({ stage: 'extract', message: '解压 adb…', percent: 92 });
     await this.extractZip(zipPath, p.root);
@@ -1138,31 +1152,46 @@ class Provisioner {
     await this.guardDisk('emulator', p.root);
     const url = await this.resolveEmulatorUrl();
     const zip = path.join(p.tmp, 'emulator.zip');
-    onProgress({ stage: 'download', message: '下载运行时引擎（约 440MB，走 Google 官方源）…', percent: 1 });
 
-    await downloadAnyParallel(this._downloadUrls(url), zip, {
-      connections: 8,
-      minChunk: 4 * 1024 * 1024,
-      onProgress: (pr) => onProgress({
-        stage: 'download',
-        message: `下载运行时引擎 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
-          + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
-        percent: Math.round(pr.percent * 0.85),
-        canResume: true,
-      }),
-    });
-    assertComplete(zip, MIN_SIZE.emulator, '运行时引擎');
+    let needDownload = true;
+    if (fs.existsSync(zip) && fs.statSync(zip).size >= MIN_SIZE.emulator) {
+      try {
+        const z = new ZipFile(zip);
+        if (z.names().length > 0) {
+          needDownload = false;
+          onProgress({ stage: 'download', message: '发现已缓存的运行时引擎安装包，跳过下载…', percent: 85 });
+        }
+      } catch (_) {
+        try { fs.rmSync(zip, { force: true }); } catch (_) {}
+      }
+    }
+
+    if (needDownload) {
+      onProgress({ stage: 'download', message: '下载运行时引擎（约 440MB，走 Google 官方源）…', percent: 1 });
+      await downloadAnyParallel(this._downloadUrls(url), zip, {
+        connections: 8,
+        minChunk: 4 * 1024 * 1024,
+        onProgress: (pr) => onProgress({
+          stage: 'download',
+          message: `下载运行时引擎 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
+            + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
+          percent: Math.round(pr.percent * 0.85),
+          canResume: true,
+        }),
+      });
+      assertComplete(zip, MIN_SIZE.emulator, '运行时引擎');
+    }
 
     onProgress({ stage: 'extract', message: '解压运行时引擎…', percent: 88 });
     await this.extractZip(zip, p.root);
-    fs.rmSync(zip, { force: true });
 
     // SDK root 必须同时具备 platform-tools，否则 emulator 拒绝启动
     this.ensurePlatformTools();
 
     const v = await this.emulatorVersion();
-    if (!v.ok) throw new Error('emulator 解压后无法运行，请检查是否被杀毒软件拦截');
+    if (!v.ok) throw new Error('emulator 解压后无法运行，请检查是否被安全机制拦截');
     this._cache.emulatorVersion = v.version;
+    fs.rmSync(zip, { force: true });
     onProgress({ stage: 'done', message: `运行时引擎 ${v.version} 就绪`, percent: 100 });
     return v;
   }
@@ -1172,13 +1201,17 @@ class Provisioner {
     const p = this.paths();
     fs.mkdirSync(p.adbDir, { recursive: true });
     if (fs.existsSync(p.adbExe)) return true;
+    const adbBin = IS_WIN ? 'adb.exe' : 'adb';
     const src = [
       path.join(this.appRoot, 'engine', 'platform-tools'),
       path.join(this.appRoot, 'tools', 'platform-tools'),
       path.dirname(this.adbVersionPath() || ''),
-    ].find((d) => d && fs.existsSync(path.join(d, 'adb.exe')));
+    ].find((d) => d && fs.existsSync(path.join(d, adbBin)));
     if (!src) return false;
-    for (const f of ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll']) {
+    const files = IS_WIN
+      ? ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll']
+      : ['adb'];
+    for (const f of files) {
       const from = path.join(src, f);
       if (fs.existsSync(from)) fs.copyFileSync(from, path.join(p.adbDir, f));
     }
@@ -1238,8 +1271,9 @@ class Provisioner {
       const block = new RegExp(`<remotePackage path="${want}"[\\s\\S]*?</remotePackage>`).exec(xml);
       if (block) {
         const base = baseOf(SOURCES.playImgIndex);
+        const abiPattern = new RegExp(`${PLAY_SYSIMG.abi}.*\\.zip$`, 'i');
         const urls = [...block[0].matchAll(/<url>([^<]+)<\/url>/g)].map((m) => absUrl(m[1], base))
-          .filter((u) => /x86_64.*\.zip$/i.test(u));
+          .filter((u) => abiPattern.test(u));
         if (urls.length) {
           this._cache.playUrl = urls[urls.length - 1];
           return this._cache.playUrl;
@@ -1256,19 +1290,35 @@ class Provisioner {
     await this.guardDisk('playimg', p.sysImgRoot);
     const url = await this.resolvePlayUrl();
     const zip = path.join(p.tmp, 'play-sysimg.zip');
-    onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（Android 14，约 1.5GB）…', percent: 1 });
-    await downloadAnyParallel(this._downloadUrls(url), zip, {
-      connections: 8,
-      minChunk: 4 * 1024 * 1024,
-      onProgress: (pr) => onProgress({
-        stage: 'download',
-        message: `下载兼容镜像 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
-          + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
-        percent: Math.round(pr.percent * 0.8),
-        canResume: true,
-      }),
-    });
-    assertComplete(zip, MIN_SIZE.sysimg, '兼容镜像');
+
+    let needDownload = true;
+    if (fs.existsSync(zip) && fs.statSync(zip).size >= MIN_SIZE.sysimg) {
+      try {
+        const z = new ZipFile(zip);
+        if (z.names().length > 0) {
+          needDownload = false;
+          onProgress({ stage: 'download', message: '发现已缓存的完整系统镜像包，跳过下载…', percent: 80 });
+        }
+      } catch (_) {
+        try { fs.rmSync(zip, { force: true }); } catch (_) {}
+      }
+    }
+
+    if (needDownload) {
+      onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（Android 14，约 1.5GB）…', percent: 1 });
+      await downloadAnyParallel(this._downloadUrls(url), zip, {
+        connections: 8,
+        minChunk: 4 * 1024 * 1024,
+        onProgress: (pr) => onProgress({
+          stage: 'download',
+          message: `下载兼容镜像 ${(pr.got / 1048576).toFixed(0)}MB / ${(pr.total / 1048576).toFixed(0)}MB`
+            + (pr.speed ? `（${(pr.speed / 1048576).toFixed(1)} MB/s）` : ''),
+          percent: Math.round(pr.percent * 0.8),
+          canResume: true,
+        }),
+      });
+      assertComplete(zip, MIN_SIZE.sysimg, '兼容镜像');
+    }
 
     const dest = path.join(p.sysImgRoot, `android-${PLAY_SYSIMG.api}`, PLAY_SYSIMG.tag);
     fs.mkdirSync(dest, { recursive: true });

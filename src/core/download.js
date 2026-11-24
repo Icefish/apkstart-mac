@@ -643,21 +643,40 @@ async function downloadMulti(urls, dest, opt = {}) {
 
 /** 依次尝试多个源（并行分块版），任一成功即返回 */
 async function downloadAnyParallel(urls, dest, opt = {}) {
-  const errors = [];
-  for (const u of urls) {
-    // 换源前必须清掉上一个源留下的半截文件：不同源压出来的包字节可能不同，
-    // 拿 A 源的半成品去续传 B 源，拼出来一定是坏文件（校验又失败 → 再重下）。
-    discardPartial(dest);
+  const list = [...new Set((urls || []).filter(Boolean))];
+  if (!list.length) throw new Error('没有可用的下载地址');
+
+  // 如果目标压缩包已完整下载在磁盘上，直接复用（跳过重复下载数百 MB）
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 10 * 1024 * 1024) {
     try {
-      // eslint-disable-next-line no-await-in-loop
-      const r = await downloadParallel(u, dest, opt);
-      return { ...r, url: u };
-    } catch (e) {
-      errors.push(`${u} → ${e.message}`);
-      discardPartial(dest);
-    }
+      const { ZipFile } = require('./zip');
+      const z = new ZipFile(dest);
+      if (z.names().length > 0) {
+        const size = fs.statSync(dest).size;
+        return { file: dest, size, cached: true };
+      }
+    } catch (_) { /* 损坏包则正常重下 */ }
   }
-  throw new Error(`所有下载源均失败：\n${errors.join('\n')}`);
+
+  // 优先走 downloadMulti（支持多源并发分块与 .chunks.json 断点续传）
+  try {
+    return await downloadMulti(list, dest, opt);
+  } catch (e) {
+    const errors = [e.message];
+    for (let i = 0; i < list.length; i++) {
+      const u = list[i];
+      if (i > 0) discardPartial(dest);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await downloadParallel(u, dest, opt);
+        return { ...r, url: u };
+      } catch (err) {
+        errors.push(`${u} → ${err.message}`);
+        if (i < list.length - 1) discardPartial(dest);
+      }
+    }
+    throw new Error(`所有下载源均失败：\n${errors.join('\n')}`);
+  }
 }
 
 module.exports = {
