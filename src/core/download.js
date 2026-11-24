@@ -420,15 +420,14 @@ async function downloadMulti(urls, dest, opt = {}) {
     onProgress = () => {},
     minChunk = 2 * 1024 * 1024,
     // 每个分块的重试次数。3 次在「三个源里有两个偶尔停摆」的链路上不够用：
-    // 1.4GB 的运行时包一旦有块耗尽重试，整包作废重下。给到 6 次（每源两轮）。
+    // 1.4GB 的运行时包一旦有块耗尽重试，整包作废重下。给到 8 次（每源两轮）。
     // 重试是从断点继续的（c.pos 保留），不会重复下载已收到的字节。
-    retries = 6,
+    retries = 8,
   } = opt;
-  const idleMs = Number(opt.idleMs) > 0 ? Number(opt.idleMs) : 20000;
+  const idleMs = Number(opt.idleMs) > 0 ? Number(opt.idleMs) : 60000;
 
   const list = [...new Set((urls || []).filter(Boolean))];
   if (!list.length) throw new Error('没有可用的下载地址');
-  if (list.length === 1) return downloadParallel(list[0], dest, opt);
 
   // 1) 并行探测：总大小 + 是否支持 Range
   const probes = await Promise.all(list.map(async (u) => {
@@ -445,7 +444,7 @@ async function downloadMulti(urls, dest, opt = {}) {
 
   const usable = probes.filter((p) => p.ranged && p.total > 0);
   if (!usable.length) {
-    return downloadAnyParallel(list, dest, opt);
+    return downloadAny(list, dest, opt);
   }
   // 只混用「声明总大小一致」的源，否则会拼出坏文件。
   // 基准取**实测最快那个源的总大小**（usable 的顺序就是 rank() 排好的速度序，
@@ -455,8 +454,8 @@ async function downloadMulti(urls, dest, opt = {}) {
   // 反而是「更快的 Gitee 包被排除、被迫走慢的 GitHub 包」。
   const total = usable[0].total;
   const same = usable.filter((p) => p.total === total);
-  if (same.length === 1 || total < minChunk * 2) {
-    return downloadParallel(same[0].url, dest, opt);
+  if (total < minChunk * 2) {
+    return download(same[0].url, dest, opt);
   }
 
   // 2) 切块，轮转分配源
@@ -611,11 +610,8 @@ async function downloadMulti(urls, dest, opt = {}) {
         } catch (e) {
           c.tries += 1;
           if (c.tries >= retries) {
-            // 重试耗尽：这份文件里已经混进了「从不同源拉来的块」，再续传也
-            // 拼不出正确字节。整包 + 边车一起作废，下次干净重来。
-            // 以前这里只 saveMeta() 保留，结果每次打开都从坏块继续 → 无限重下。
-            discardPartial(dest);
-            throw new Error(`分块失败（${c.start}-${c.end}）：${e.message}`);
+            saveMeta();
+            throw new Error(`分块下载暂时中断（${c.start}-${c.end}）：${e.message}。下次启动将从断点接续下载。`);
           }
           // 换一个源再试：一个镜像抽风不该拖垮整个下载
           c.src += 1;
@@ -626,7 +622,7 @@ async function downloadMulti(urls, dest, opt = {}) {
     }));
   } catch (e) {
     try { fs.closeSync(fd); } catch (_) { /* ignore */ }
-    discardPartial(dest);
+    saveMeta();
     throw e;
   }
   fs.closeSync(fd);

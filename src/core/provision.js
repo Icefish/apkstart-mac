@@ -1169,7 +1169,9 @@ class Provisioner {
     if (needDownload) {
       onProgress({ stage: 'download', message: '下载运行时引擎（约 440MB，走 Google 官方源）…', percent: 1 });
       await downloadAnyParallel(this._downloadUrls(url), zip, {
-        connections: 8,
+        connections: 4,
+        idleMs: 60000,
+        retries: 8,
         minChunk: 4 * 1024 * 1024,
         onProgress: (pr) => onProgress({
           stage: 'download',
@@ -1307,7 +1309,9 @@ class Provisioner {
     if (needDownload) {
       onProgress({ stage: 'download', message: '下载 ARM 兼容镜像（Android 14，约 1.5GB）…', percent: 1 });
       await downloadAnyParallel(this._downloadUrls(url), zip, {
-        connections: 8,
+        connections: 4,
+        idleMs: 60000,
+        retries: 8,
         minChunk: 4 * 1024 * 1024,
         onProgress: (pr) => onProgress({
           stage: 'download',
